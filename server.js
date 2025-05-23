@@ -25,6 +25,59 @@ const tusServer = new Server({
   datastore: fileStore
 });
 
+// Custom middleware to check for duplicate files before the upload starts
+app.use("/files", (req, res, next) => {
+  // Only check POST requests (new uploads)
+  if (req.method === "POST") {
+    console.log("Checking for duplicate files before upload starts");
+    
+    try {
+      // Get the metadata from the Upload-Metadata header
+      const metadataHeader = req.headers["upload-metadata"];
+      if (!metadataHeader) {
+        return next();
+      }
+      
+      // Parse the metadata
+      const metadata = {};
+      metadataHeader.split(",").forEach(item => {
+        const [key, value] = item.split(" ");
+        if (key && value) {
+          metadata[key] = Buffer.from(value, "base64").toString("utf8");
+        }
+      });
+      
+      console.log("Metadata:", metadata);
+      
+      // Only check for duplicates if useOriginalFilename is true and onDuplicateFiles is prevent
+      if (metadata.useOriginalFilename === "true" && metadata.filename && metadata.onDuplicateFiles === "prevent") {
+        const originalFilename = metadata.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const filePath = path.join(uploadsDir, originalFilename);
+        
+        // Check if file already exists
+        if (fs.existsSync(filePath)) {
+          console.log(`File ${originalFilename} already exists, preventing upload`);
+          
+          // Return a 409 Conflict status code
+          return res.status(409).json({
+            error: {
+              message: `File "${metadata.filename}" already exists and duplicates are not allowed`
+            }
+          });
+        }
+      }
+      
+      // Allow the upload to proceed
+      next();
+    } catch (error) {
+      console.error(`Error in duplicate file check middleware: ${error.message}`);
+      next(); // Allow the upload to proceed in case of error
+    }
+  } else {
+    next();
+  }
+});
+
 // Listen for the POST_FINISH event which is emitted after an upload is completed
 // and a response has been sent to the client
 tusServer.on(EVENTS.POST_FINISH, async (req, res, upload) => {
@@ -46,26 +99,18 @@ tusServer.on(EVENTS.POST_FINISH, async (req, res, upload) => {
       console.log(`Original filename: ${originalFilename}`);
       console.log(`UUID file path: ${uuidFilePath}`);
       
-      // Handle duplicate filenames
-      if (fs.existsSync(originalFilePath)) {
-        const onDuplicate = meta.onDuplicateFiles || "number";
-        
-        if (onDuplicate === "prevent") {
-          // Keep UUID filename and don't rename
-          console.log(`File ${originalFilename} already exists, keeping UUID filename`);
-          return;
-        } else if (onDuplicate === "number") {
-          const ext = path.extname(originalFilename);
-          const base = path.basename(originalFilename, ext);
-          let i = 1;
-          let candidate = `${base}${ext}`;
-          while (fs.existsSync(path.join(uploadsDir, candidate))) {
-            candidate = `${base}(${i})${ext}`;
-            i++;
-          }
-          finalFilename = candidate;
-          console.log(`File ${originalFilename} already exists, using numbered filename: ${finalFilename}`);
+      // Handle duplicate filenames for "number" option
+      if (fs.existsSync(originalFilePath) && meta.onDuplicateFiles === "number") {
+        const ext = path.extname(originalFilename);
+        const base = path.basename(originalFilename, ext);
+        let i = 1;
+        let candidate = `${base}${ext}`;
+        while (fs.existsSync(path.join(uploadsDir, candidate))) {
+          candidate = `${base}(${i})${ext}`;
+          i++;
         }
+        finalFilename = candidate;
+        console.log(`File ${originalFilename} already exists, using numbered filename: ${finalFilename}`);
       }
       
       const newFilePath = path.join(uploadsDir, finalFilename);
