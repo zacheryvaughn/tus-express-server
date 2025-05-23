@@ -1,6 +1,6 @@
 import express from "express";
 import { Server } from "@tus/server";
-import { FileStore } from "@tus/file-store";
+import { CustomFileStore } from "./CustomFileStore.js";
 
 const app = express();
 const port = 1080;
@@ -11,7 +11,7 @@ app.use(express.static("public"));
 // Initialize the tus server
 const tusServer = new Server({
   path: "/files",
-  datastore: new FileStore({ directory: "./uploads" }),
+  datastore: new CustomFileStore({ directory: "./uploads" }),
 });
 
 // Use a middleware to handle all requests to /files

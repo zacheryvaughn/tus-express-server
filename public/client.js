@@ -12,6 +12,8 @@ document.getElementById("fileInput").addEventListener("change", (event) => {
     metadata: {
       filename: file.name,
       filetype: file.type,
+      useOriginalFilename: "true",      // Set to "true" or "false"
+      onDuplicateFiles: "prevent",       // Set to "number" or "prevent"
     },
     onError: (error) => {
       console.error("Upload failed:", error);
