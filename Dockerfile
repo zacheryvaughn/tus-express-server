@@ -12,4 +12,4 @@ EXPOSE 1080
 
 CMD ["node", "server.js"]
 
-# LATEST: docker buildx build --platform linux/amd64 -t zacvaughndev/tus-express-server:v1 --push .
+# LATEST: docker buildx build --platform linux/amd64 -t zacvaughndev/tus-express-server:v2 --push .
