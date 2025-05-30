@@ -1,0 +1,9 @@
+# System
+.DS_Store
+
+# Dependencies
+node_modules/
+
+# Test Files
+staging/
+workspace/
