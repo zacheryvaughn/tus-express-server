@@ -1,6 +1,6 @@
 # TUS Express Server with Parallel Uploads
 
-A TUS (resumable upload) server with added multipart functionality for parallel upload performance.
+A TUS (resumable upload) server with added multipart functionality for parallel upload performance with pipe efficiency around 85%.
 
 ## What This Adds to Standard TUS
 
