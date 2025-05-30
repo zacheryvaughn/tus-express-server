@@ -1,5 +1,5 @@
 // Configuration
-const config = {
+const CLIENT_CONFIG = {
     maxFileSelection: 5,
     endpoint: "http://localhost:1080/files/",
     chunkSize: 8 * 1024 * 1024,
@@ -22,9 +22,9 @@ const message = document.getElementById('message');
 fileInput.addEventListener('change', (e) => {
     let files = Array.from(e.target.files);
     
-    if (files.length > config.maxFileSelection) {
-        message.textContent = `You can select up to ${config.maxFileSelection} files.`;
-        files = files.slice(0, config.maxFileSelection);
+    if (files.length > CLIENT_CONFIG.maxFileSelection) {
+        message.textContent = `You can select up to ${CLIENT_CONFIG.maxFileSelection} files.`;
+        files = files.slice(0, CLIENT_CONFIG.maxFileSelection);
     } else {
         message.textContent = '';
     }
@@ -103,9 +103,9 @@ function uploadPart(file, partIndex, partSize, multipartId, totalParts, onPartCo
     const partNumber = partIndex + 1;
 
     const upload = new tus.Upload(partBlob, {
-        endpoint: config.endpoint,
-        chunkSize: config.chunkSize,
-        retryDelays: config.retryDelays,
+        endpoint: CLIENT_CONFIG.endpoint,
+        chunkSize: CLIENT_CONFIG.chunkSize,
+        retryDelays: CLIENT_CONFIG.retryDelays,
         metadata: {
             filename: file.name,
             filetype: file.type,
@@ -113,8 +113,8 @@ function uploadPart(file, partIndex, partSize, multipartId, totalParts, onPartCo
             partIndex: partNumber.toString(),
             totalParts: totalParts.toString(),
             originalFileSize: file.size.toString(),
-            useOriginalFilename: config.useOriginalFilename,
-            onDuplicateFiles: config.onDuplicateFiles
+            useOriginalFilename: CLIENT_CONFIG.useOriginalFilename,
+            onDuplicateFiles: CLIENT_CONFIG.onDuplicateFiles
         },
         onError: (error) => {
             console.error(`Part ${partNumber} failed:`, error);
