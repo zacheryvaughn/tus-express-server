@@ -1,7 +1,7 @@
 // Configuration
 const CLIENT_CONFIG = {
-    maxFileSelection: 5,
-    endpoint: "http://localhost:1080/files/",
+    maxFileSelection: 10,
+    endpoint: `${window.location.protocol}//${window.location.host}/files/`,
     chunkSize: 8 * 1024 * 1024,
     retryDelays: [0, 1000, 3000, 5000],
     useOriginalFilename: "true",

@@ -10,11 +10,12 @@ dotenv.config();
 const SERVER_CONFIG = {
   port: process.env.PORT || 1080,
   stagingDir: process.env.STAGING_DIR || "./staging",
-  mountPath: process.env.MOUNT_PATH || "./workspace",
+  mountPath: process.env.MOUNT_PATH || "./test_volume",
   filenameSanitizeRegex: /[^a-zA-Z0-9._-]/g
 };
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.static("public"));
 
 // Utility functions
@@ -45,13 +46,46 @@ const getUniqueFilename = (filename, dir) => {
 
 const moveFile = (from, to, jsonPath, keepJson = false) => {
   try {
+    // Try fast rename first
     fs.renameSync(from, to);
+  } catch (error) {
+    if (error.code === 'EXDEV') {
+      // Cross-device link error - use copy and delete
+      try {
+        fs.copyFileSync(from, to);
+        fs.unlinkSync(from);
+      } catch (copyError) {
+        console.error(`Copy failed: ${copyError.message}`);
+        return false;
+      }
+    } else {
+      console.error(`Move failed: ${error.message}`);
+      return false;
+    }
+  }
+  
+  // Handle JSON metadata file with same cross-device logic
+  try {
     if (fs.existsSync(jsonPath)) {
-      keepJson ? fs.renameSync(jsonPath, `${to}.json`) : fs.unlinkSync(jsonPath);
+      if (keepJson) {
+        const jsonDestination = `${to}.json`;
+        try {
+          fs.renameSync(jsonPath, jsonDestination);
+        } catch (error) {
+          if (error.code === 'EXDEV') {
+            fs.copyFileSync(jsonPath, jsonDestination);
+            fs.unlinkSync(jsonPath);
+          } else {
+            throw error;
+          }
+        }
+      } else {
+        fs.unlinkSync(jsonPath);
+      }
     }
     return true;
   } catch (error) {
-    console.error(`Move failed: ${error.message}`);
+    console.error(`JSON file handling failed: ${error.message}`);
     return false;
   }
 };
@@ -196,7 +230,13 @@ const multipartManager = new MultipartManager();
 const fileStore = new FileStore({ directory: SERVER_CONFIG.stagingDir });
 const tusServer = new Server({
   path: "/files",
-  datastore: fileStore
+  datastore: fileStore,
+  respectForwardedHeaders: true,
+  generateUrl: (req, { proto, host, path, id }) => {
+    const protocol = req.headers["x-forwarded-proto"] || proto || "https";
+    const hostname = req.headers["x-forwarded-host"] || req.headers.host || host;
+    return `${protocol}://${hostname}${path}/${id}`;
+  }
 });
 
 // Duplicate file check middleware
