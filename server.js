@@ -56,9 +56,141 @@ const moveFile = (from, to, jsonPath, keepJson = false) => {
   }
 };
 
+// Multipart Manager
+class MultipartManager {
+  constructor() {
+    this.assemblies = new Map();
+  }
+
+  isMultipartUpload(metadata) {
+    return metadata.multipartId && metadata.partIndex && metadata.totalParts;
+  }
+
+  async handlePartCompletion(upload) {
+    const meta = upload.metadata;
+    const multipartId = meta.multipartId;
+    
+    // Initialize assembly tracking
+    if (!this.assemblies.has(multipartId)) {
+      this.assemblies.set(multipartId, {
+        parts: new Map(),
+        totalParts: parseInt(meta.totalParts),
+        metadata: meta
+      });
+    }
+
+    // Track this part
+    const assembly = this.assemblies.get(multipartId);
+    assembly.parts.set(parseInt(meta.partIndex), upload.id);
+
+    // Assemble when all parts are complete
+    if (assembly.parts.size === assembly.totalParts) {
+      await this.assembleFile(multipartId, assembly);
+      this.assemblies.delete(multipartId);
+    }
+  }
+
+  async assembleFile(multipartId, assembly) {
+    const meta = assembly.metadata;
+    const firstPartId = assembly.parts.get(1);
+    
+    try {
+      // Append remaining parts to first part
+      const writeStream = fs.createWriteStream(
+        path.join(CONFIG.stagingDir, firstPartId),
+        { flags: 'a' }
+      );
+      
+      for (let i = 2; i <= assembly.totalParts; i++) {
+        const partId = assembly.parts.get(i);
+        const partPath = path.join(CONFIG.stagingDir, partId);
+        
+        await this.appendFile(writeStream, partPath);
+        this.cleanupPartFiles(partId);
+      }
+      
+      writeStream.end();
+      
+      // Update first part's metadata to represent complete file
+      this.updateMetadata(firstPartId, meta);
+      
+      // Process assembled file with existing logic
+      this.processAssembledFile({
+        id: firstPartId,
+        metadata: {
+          filename: meta.filename,
+          filetype: meta.filetype,
+          useOriginalFilename: meta.useOriginalFilename,
+          onDuplicateFiles: meta.onDuplicateFiles
+        }
+      });
+      
+    } catch (error) {
+      console.error(`Assembly failed for ${multipartId}:`, error);
+    }
+  }
+
+  appendFile(writeStream, filePath) {
+    return new Promise((resolve, reject) => {
+      const readStream = fs.createReadStream(filePath);
+      readStream.pipe(writeStream, { end: false });
+      readStream.on('end', resolve);
+      readStream.on('error', reject);
+    });
+  }
+
+  cleanupPartFiles(partId) {
+    const partPath = path.join(CONFIG.stagingDir, partId);
+    const jsonPath = path.join(CONFIG.stagingDir, `${partId}.json`);
+    
+    if (fs.existsSync(partPath)) fs.unlinkSync(partPath);
+    if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
+  }
+
+  updateMetadata(fileId, meta) {
+    const jsonPath = path.join(CONFIG.stagingDir, `${fileId}.json`);
+    const originalJson = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    
+    const updatedMetadata = {
+      id: fileId,
+      metadata: {
+        filename: meta.filename,
+        filetype: meta.filetype,
+        useOriginalFilename: meta.useOriginalFilename,
+        onDuplicateFiles: meta.onDuplicateFiles
+      },
+      size: parseInt(meta.originalFileSize),
+      offset: parseInt(meta.originalFileSize),
+      creation_date: originalJson.creation_date
+    };
+    
+    fs.writeFileSync(jsonPath, JSON.stringify(updatedMetadata, null, 2));
+  }
+
+  processAssembledFile(upload) {
+    const meta = upload.metadata || {};
+    const useOriginal = meta.useOriginalFilename === "true" && meta.filename;
+    
+    const finalFilename = useOriginal
+      ? (meta.onDuplicateFiles === "number"
+          ? getUniqueFilename(sanitizeFilename(meta.filename), CONFIG.mountPath)
+          : sanitizeFilename(meta.filename))
+      : upload.id;
+
+    const stagingPath = path.join(CONFIG.stagingDir, upload.id);
+    const destinationPath = path.join(CONFIG.mountPath, finalFilename);
+    const jsonPath = path.join(CONFIG.stagingDir, `${upload.id}.json`);
+
+    moveFile(stagingPath, destinationPath, jsonPath, !useOriginal);
+  }
+}
+
 // Initialize directories
 ensureDir(CONFIG.stagingDir);
 ensureDir(CONFIG.mountPath);
+
+// Initialize multipart manager
+const multipartManager = new MultipartManager();
 
 // Initialize TUS server
 const fileStore = new FileStore({ directory: CONFIG.stagingDir });
@@ -85,8 +217,16 @@ app.use("/files", (req, res, next) => {
 });
 
 // Handle upload completion
-tusServer.on(EVENTS.POST_FINISH, (req, res, upload) => {
+tusServer.on(EVENTS.POST_FINISH, async (req, res, upload) => {
   const meta = upload.metadata || {};
+  
+  // Check if this is a multipart upload with more than 1 part
+  if (multipartManager.isMultipartUpload(meta) && meta.totalParts !== "1") {
+    await multipartManager.handlePartCompletion(upload);
+    return; // Don't process as regular file
+  }
+  
+  // Regular file processing (existing logic) - handles both regular uploads and single-part uploads
   const useOriginal = meta.useOriginalFilename === "true" && meta.filename;
   
   const finalFilename = useOriginal
