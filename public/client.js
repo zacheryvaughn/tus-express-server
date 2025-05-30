@@ -13,7 +13,7 @@ document.getElementById("fileInput").addEventListener("change", (event) => {
             filename: file.name,
             filetype: file.type,
             useOriginalFilename: "true",
-            onDuplicateFiles: "prevent",
+            onDuplicateFiles: "number",
         },
         onError: (error) => {
             console.error("Upload failed:", error);

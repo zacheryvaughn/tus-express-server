@@ -5,10 +5,8 @@ import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
 
-// Load environment variables
 dotenv.config();
 
-// Configuration
 const CONFIG = {
   port: process.env.PORT || 1080,
   stagingDir: process.env.STAGING_DIR || "./staging",
@@ -20,67 +18,47 @@ const app = express();
 app.use(express.static("public"));
 
 // Utility functions
-const ensureDirectoryExists = (dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+const ensureDir = (dir) => !fs.existsSync(dir) && fs.mkdirSync(dir, { recursive: true });
+
+const parseMetadata = (header) => {
+  if (!header) return {};
+  return Object.fromEntries(
+    header.split(",")
+      .map(item => item.split(" "))
+      .filter(([key, value]) => key && value)
+      .map(([key, value]) => [key, Buffer.from(value, "base64").toString("utf8")])
+  );
 };
 
-const parseMetadata = (metadataHeader) => {
-  if (!metadataHeader) return {};
+const sanitizeFilename = (filename) => filename.replace(CONFIG.filenameSanitizeRegex, "_");
+
+const getUniqueFilename = (filename, dir) => {
+  const ext = path.extname(filename);
+  const base = path.basename(filename, ext);
+  let i = 1, candidate = filename;
   
-  const metadata = {};
-  metadataHeader.split(",").forEach(item => {
-    const [key, value] = item.split(" ");
-    if (key && value) {
-      metadata[key] = Buffer.from(value, "base64").toString("utf8");
-    }
-  });
-  return metadata;
-};
-
-const sanitizeFilename = (filename) => {
-  return filename.replace(CONFIG.filenameSanitizeRegex, "_");
-};
-
-const generateUniqueFilename = (originalFilename, mountPath) => {
-  const ext = path.extname(originalFilename);
-  const base = path.basename(originalFilename, ext);
-  let i = 1;
-  let candidate = originalFilename;
-  
-  while (fs.existsSync(path.join(mountPath, candidate))) {
-    candidate = `${base}(${i})${ext}`;
-    i++;
+  while (fs.existsSync(path.join(dir, candidate))) {
+    candidate = `${base}(${i++})${ext}`;
   }
   return candidate;
 };
 
-const moveFileToDestination = (stagingFilePath, destinationFilePath, jsonFilePath) => {
+const moveFile = (from, to, jsonPath, keepJson = false) => {
   try {
-    if (!fs.existsSync(stagingFilePath)) {
-      throw new Error(`File not found at ${stagingFilePath}`);
+    fs.renameSync(from, to);
+    if (fs.existsSync(jsonPath)) {
+      keepJson ? fs.renameSync(jsonPath, `${to}.json`) : fs.unlinkSync(jsonPath);
     }
-
-    console.log(`Moving ${stagingFilePath} to ${destinationFilePath}`);
-    fs.renameSync(stagingFilePath, destinationFilePath);
-
-    // Clean up JSON metadata file
-    if (fs.existsSync(jsonFilePath)) {
-      console.log(`Deleting JSON file: ${jsonFilePath}`);
-      fs.unlinkSync(jsonFilePath);
-    }
-
     return true;
   } catch (error) {
-    console.error(`Error during file move: ${error.message}`);
+    console.error(`Move failed: ${error.message}`);
     return false;
   }
 };
 
 // Initialize directories
-ensureDirectoryExists(CONFIG.stagingDir);
-ensureDirectoryExists(CONFIG.mountPath);
+ensureDir(CONFIG.stagingDir);
+ensureDir(CONFIG.mountPath);
 
 // Initialize TUS server
 const fileStore = new FileStore({ directory: CONFIG.stagingDir });
@@ -91,82 +69,37 @@ const tusServer = new Server({
 
 // Duplicate file check middleware
 app.use("/files", (req, res, next) => {
-  if (req.method !== "POST") {
-    return next();
+  if (req.method !== "POST") return next();
+
+  const metadata = parseMetadata(req.headers["upload-metadata"]);
+  const shouldPrevent = metadata.useOriginalFilename === "true" &&
+                       metadata.filename &&
+                       metadata.onDuplicateFiles === "prevent";
+
+  if (shouldPrevent && fs.existsSync(path.join(CONFIG.mountPath, sanitizeFilename(metadata.filename)))) {
+    return res.status(409).json({
+      error: { message: `File "${metadata.filename}" already exists and duplicates are not allowed` }
+    });
   }
-
-  console.log("Checking for duplicate files before upload starts");
-
-  try {
-    const metadata = parseMetadata(req.headers["upload-metadata"]);
-    console.log("Metadata:", metadata);
-
-    const shouldPreventDuplicates = metadata.useOriginalFilename === "true" &&
-                                   metadata.filename &&
-                                   metadata.onDuplicateFiles === "prevent";
-
-    if (shouldPreventDuplicates) {
-      const sanitizedFilename = sanitizeFilename(metadata.filename);
-      const filePath = path.join(CONFIG.mountPath, sanitizedFilename);
-
-      if (fs.existsSync(filePath)) {
-        console.log(`File ${sanitizedFilename} already exists, preventing upload`);
-        return res.status(409).json({
-          error: {
-            message: `File "${metadata.filename}" already exists and duplicates are not allowed`
-          }
-        });
-      }
-    }
-
-    next();
-  } catch (error) {
-    console.error(`Error in duplicate file check middleware: ${error.message}`);
-    next();
-  }
+  next();
 });
 
 // Handle upload completion
-tusServer.on(EVENTS.POST_FINISH, async (req, res, upload) => {
-  console.log(`Upload complete: ${upload.id}`);
+tusServer.on(EVENTS.POST_FINISH, (req, res, upload) => {
+  const meta = upload.metadata || {};
+  const useOriginal = meta.useOriginalFilename === "true" && meta.filename;
+  
+  const finalFilename = useOriginal
+    ? (meta.onDuplicateFiles === "number"
+        ? getUniqueFilename(sanitizeFilename(meta.filename), CONFIG.mountPath)
+        : sanitizeFilename(meta.filename))
+    : upload.id;
 
-  try {
-    const meta = upload.metadata || {};
-    console.log(`Metadata: ${JSON.stringify(meta)}`);
+  const stagingPath = path.join(CONFIG.stagingDir, upload.id);
+  const destinationPath = path.join(CONFIG.mountPath, finalFilename);
+  const jsonPath = path.join(CONFIG.stagingDir, `${upload.id}.json`);
 
-    const shouldUseOriginalFilename = meta.useOriginalFilename === "true" && meta.filename;
-    
-    if (!shouldUseOriginalFilename) {
-      return;
-    }
-
-    const originalFilename = sanitizeFilename(meta.filename);
-    const stagingFilePath = path.join(CONFIG.stagingDir, upload.id);
-    const jsonFilePath = path.join(CONFIG.stagingDir, `${upload.id}.json`);
-
-    let finalFilename = originalFilename;
-
-    // Handle duplicate files with numbering
-    if (meta.onDuplicateFiles === "number") {
-      finalFilename = generateUniqueFilename(originalFilename, CONFIG.mountPath);
-      if (finalFilename !== originalFilename) {
-        console.log(`File ${originalFilename} already exists, using numbered filename: ${finalFilename}`);
-      }
-    }
-
-    const destinationFilePath = path.join(CONFIG.mountPath, finalFilename);
-
-    console.log(`Processing: ${originalFilename} -> ${CONFIG.mountPath}`);
-    
-    const success = moveFileToDestination(stagingFilePath, destinationFilePath, jsonFilePath);
-    
-    if (success) {
-      console.log(`Successfully processed file: ${finalFilename}`);
-    }
-
-  } catch (error) {
-    console.error(`Error in POST_FINISH event handler: ${error.message}`);
-  }
+  moveFile(stagingPath, destinationPath, jsonPath, !useOriginal);
 });
 
 // Mount TUS server
