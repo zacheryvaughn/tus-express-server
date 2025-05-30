@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const CONFIG = {
+const SERVER_CONFIG = {
   port: process.env.PORT || 1080,
   stagingDir: process.env.STAGING_DIR || "./staging",
   mountPath: process.env.MOUNT_PATH || "./workspace",
@@ -30,7 +30,7 @@ const parseMetadata = (header) => {
   );
 };
 
-const sanitizeFilename = (filename) => filename.replace(CONFIG.filenameSanitizeRegex, "_");
+const sanitizeFilename = (filename) => filename.replace(SERVER_CONFIG.filenameSanitizeRegex, "_");
 
 const getUniqueFilename = (filename, dir) => {
   const ext = path.extname(filename);
@@ -97,13 +97,13 @@ class MultipartManager {
     try {
       // Append remaining parts to first part
       const writeStream = fs.createWriteStream(
-        path.join(CONFIG.stagingDir, firstPartId),
+        path.join(SERVER_CONFIG.stagingDir, firstPartId),
         { flags: 'a' }
       );
       
       for (let i = 2; i <= assembly.totalParts; i++) {
         const partId = assembly.parts.get(i);
-        const partPath = path.join(CONFIG.stagingDir, partId);
+        const partPath = path.join(SERVER_CONFIG.stagingDir, partId);
         
         await this.appendFile(writeStream, partPath);
         this.cleanupPartFiles(partId);
@@ -140,15 +140,15 @@ class MultipartManager {
   }
 
   cleanupPartFiles(partId) {
-    const partPath = path.join(CONFIG.stagingDir, partId);
-    const jsonPath = path.join(CONFIG.stagingDir, `${partId}.json`);
+    const partPath = path.join(SERVER_CONFIG.stagingDir, partId);
+    const jsonPath = path.join(SERVER_CONFIG.stagingDir, `${partId}.json`);
     
     if (fs.existsSync(partPath)) fs.unlinkSync(partPath);
     if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
   }
 
   updateMetadata(fileId, meta) {
-    const jsonPath = path.join(CONFIG.stagingDir, `${fileId}.json`);
+    const jsonPath = path.join(SERVER_CONFIG.stagingDir, `${fileId}.json`);
     const originalJson = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     
     const updatedMetadata = {
@@ -173,27 +173,27 @@ class MultipartManager {
     
     const finalFilename = useOriginal
       ? (meta.onDuplicateFiles === "number"
-          ? getUniqueFilename(sanitizeFilename(meta.filename), CONFIG.mountPath)
+          ? getUniqueFilename(sanitizeFilename(meta.filename), SERVER_CONFIG.mountPath)
           : sanitizeFilename(meta.filename))
       : upload.id;
 
-    const stagingPath = path.join(CONFIG.stagingDir, upload.id);
-    const destinationPath = path.join(CONFIG.mountPath, finalFilename);
-    const jsonPath = path.join(CONFIG.stagingDir, `${upload.id}.json`);
+    const stagingPath = path.join(SERVER_CONFIG.stagingDir, upload.id);
+    const destinationPath = path.join(SERVER_CONFIG.mountPath, finalFilename);
+    const jsonPath = path.join(SERVER_CONFIG.stagingDir, `${upload.id}.json`);
 
     moveFile(stagingPath, destinationPath, jsonPath, !useOriginal);
   }
 }
 
 // Initialize directories
-ensureDir(CONFIG.stagingDir);
-ensureDir(CONFIG.mountPath);
+ensureDir(SERVER_CONFIG.stagingDir);
+ensureDir(SERVER_CONFIG.mountPath);
 
 // Initialize multipart manager
 const multipartManager = new MultipartManager();
 
 // Initialize TUS server
-const fileStore = new FileStore({ directory: CONFIG.stagingDir });
+const fileStore = new FileStore({ directory: SERVER_CONFIG.stagingDir });
 const tusServer = new Server({
   path: "/files",
   datastore: fileStore
@@ -208,7 +208,7 @@ app.use("/files", (req, res, next) => {
                        metadata.filename &&
                        metadata.onDuplicateFiles === "prevent";
 
-  if (shouldPrevent && fs.existsSync(path.join(CONFIG.mountPath, sanitizeFilename(metadata.filename)))) {
+  if (shouldPrevent && fs.existsSync(path.join(SERVER_CONFIG.mountPath, sanitizeFilename(metadata.filename)))) {
     return res.status(409).json({
       error: { message: `File "${metadata.filename}" already exists and duplicates are not allowed` }
     });
@@ -226,18 +226,17 @@ tusServer.on(EVENTS.POST_FINISH, async (req, res, upload) => {
     return; // Don't process as regular file
   }
   
-  // Regular file processing (existing logic) - handles both regular uploads and single-part uploads
   const useOriginal = meta.useOriginalFilename === "true" && meta.filename;
   
   const finalFilename = useOriginal
     ? (meta.onDuplicateFiles === "number"
-        ? getUniqueFilename(sanitizeFilename(meta.filename), CONFIG.mountPath)
+        ? getUniqueFilename(sanitizeFilename(meta.filename), SERVER_CONFIG.mountPath)
         : sanitizeFilename(meta.filename))
     : upload.id;
 
-  const stagingPath = path.join(CONFIG.stagingDir, upload.id);
-  const destinationPath = path.join(CONFIG.mountPath, finalFilename);
-  const jsonPath = path.join(CONFIG.stagingDir, `${upload.id}.json`);
+  const stagingPath = path.join(SERVER_CONFIG.stagingDir, upload.id);
+  const destinationPath = path.join(SERVER_CONFIG.mountPath, finalFilename);
+  const jsonPath = path.join(SERVER_CONFIG.stagingDir, `${upload.id}.json`);
 
   moveFile(stagingPath, destinationPath, jsonPath, !useOriginal);
 });
@@ -248,8 +247,8 @@ app.use("/files", (req, res) => {
 });
 
 // Start server
-app.listen(CONFIG.port, () => {
-  console.log(`TUS server is running at http://localhost:${CONFIG.port}/files`);
-  console.log(`Staging directory: ${CONFIG.stagingDir}`);
-  console.log(`Mount path: ${CONFIG.mountPath}`);
+app.listen(SERVER_CONFIG.port, () => {
+  console.log(`TUS server is running at http://localhost:${SERVER_CONFIG.port}/files`);
+  console.log(`Staging directory: ${SERVER_CONFIG.stagingDir}`);
+  console.log(`Mount path: ${SERVER_CONFIG.mountPath}`);
 });
