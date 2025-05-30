@@ -11,6 +11,7 @@ const CLIENT_CONFIG = {
 // Queue management
 let fileQueue = [];
 let uploading = false;
+let currentFileProgress = { uploaded: 0, total: 0, fileName: '' };
 
 // DOM elements
 const fileInput = document.getElementById('fileInput');
@@ -82,6 +83,14 @@ function uploadFile(file) {
         
         console.log(`Uploading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB) in ${totalParts} parts`);
         
+        // Initialize progress tracking
+        currentFileProgress = {
+            uploaded: 0,
+            total: file.size,
+            fileName: file.name,
+            partProgress: new Array(totalParts).fill(0)
+        };
+        
         let completedParts = 0;
         
         for (let i = 0; i < totalParts; i++) {
@@ -121,8 +130,15 @@ function uploadPart(file, partIndex, partSize, multipartId, totalParts, onPartCo
             onError(error);
         },
         onProgress: (bytesUploaded, bytesTotal) => {
-            const percentage = ((bytesUploaded / bytesTotal) * 100).toFixed(2);
-            console.log(`Part ${partNumber}: ${percentage}% (${bytesUploaded}/${bytesTotal} bytes)`);
+            // Update this part's progress
+            currentFileProgress.partProgress[partIndex] = bytesUploaded;
+            
+            // Calculate total uploaded across all parts
+            const totalUploaded = currentFileProgress.partProgress.reduce((sum, bytes) => sum + bytes, 0);
+            const overallPercentage = ((totalUploaded / currentFileProgress.total) * 100).toFixed(1);
+            
+            // Update message with overall percentage
+            message.textContent = `Uploading: ${currentFileProgress.fileName} - ${overallPercentage}%`;
         },
         onSuccess: () => {
             console.log(`Part ${partNumber} completed!`);
